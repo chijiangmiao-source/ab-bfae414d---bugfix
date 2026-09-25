@@ -142,6 +142,54 @@ test('成功表达式携带约束归并依据（事件）', () => {
   assert.ok(idRef.events.some((s) => /实例化/.test(s)), '宏引用应记录方案实例化');
 });
 
+test('可解的多单位整数指数校准宏：(x^2)*(y^3)+参考读数，以 m^-1、m 调用得 num<m>', () => {
+  // x^2*y^3 与单位为 m 的参考读数相加：2·u_x + 3·u_y = m，gcd(2,3)=1 整除 1，可解；
+  // 以 x:m^-1、y:m 调用时乘积恰为 m^-2 * m^3 = m。
+  const src = [
+    'sensor ref : m;',
+    'let cal = fun x -> fun y -> (x * x) * (y * y * y) + ref;',
+    'sensor xv : m^-1;',
+    'sensor yv : m;',
+    'cal xv yv',
+    '',
+  ].join('\n');
+  const r = runInference(src);
+  assert.equal(r.ok, true, r.ok ? '' : `应推断成功，实际：${r.error && r.error.message}`);
+  assert.equal(r.output, 'num<m>');
+  const call = r.expressions.find((e) => e.snippet === 'cal xv yv');
+  assert.ok(call, '应存在调用表达式 cal xv yv');
+  assert.equal(call.type, 'num<m>');
+  const partial = r.expressions.filter((e) => e.snippet === 'cal xv').map((e) => e.type);
+  assert.ok(partial.every((t) => t === 'num<m> -> num<m>'), `部分应用应要求 num<m>：${JSON.stringify(partial)}`);
+  // 宏本身保留一个自由单位维（最一般解），但返回单位恒为 m
+  const cal = r.generalizable.find((g) => g.name === 'cal');
+  assert.ok(cal, 'cal 应有泛化类型方案');
+  assert.match(cal.scheme, / -> num<m>$/);
+});
+
+test('真正无法满足的整数指数单位约束仍被拒绝（2·u = m）', () => {
+  // x^2 与 m 相加：2·u = m，gcd=2 不整除 1，不可解。
+  const src = 'sensor ref : m;\nlet f = fun x -> x * x + ref;\nf 1\n';
+  const r = runInference(src);
+  assert.equal(r.ok, false);
+  assert.match(r.error.message, /单位不匹配/);
+  assert.equal(r.expressions, undefined, '出错响应不得携带旧的成功结论');
+});
+
+test('可解但带自由维：2·u_x+4·u_y = m^2 的宏可复用且调用类型正确', () => {
+  // gcd(2,4)=2 整除 m^2 的指数 2；以 x=m^-1、y=m 代入：2(-1)+4(1)=2 = m^2。
+  const src = [
+    'sensor xv : m^-1;',
+    'sensor yv : m;',
+    'let g = fun x -> fun y -> x * x * y * y * y * y + 1<m^2>;',
+    'g xv yv',
+    '',
+  ].join('\n');
+  const r = runInference(src);
+  assert.equal(r.ok, true, r.ok ? '' : `应推断成功，实际：${r.error && r.error.message}`);
+  assert.equal(r.output, 'num<m^2>');
+});
+
 test('推断确定性：同一脚本两次结果完全一致', () => {
   const a = runInference(IDENTITY_SCRIPT);
   const b = runInference(IDENTITY_SCRIPT);

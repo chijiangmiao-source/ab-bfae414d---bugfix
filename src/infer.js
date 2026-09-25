@@ -143,7 +143,8 @@ function unify(ctx, t1, t2) {
     unify(ctx, a.ret, b.ret);
     return;
   }
-  U.unifyMonos(a.unit, b.unit);
+  // 丢番图合一可能引入新的自由单位变量（最一般解），交由推断上下文分配编号
+  U.unifyMonos(a.unit, b.unit, () => newUVar(ctx));
   log(ctx, `单位合一成功：两侧单位归一为 ${renderMono(ctx.R, a.unit)}`);
 }
 

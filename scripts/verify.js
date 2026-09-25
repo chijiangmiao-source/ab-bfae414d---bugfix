@@ -157,6 +157,40 @@ async function httpChecks() {
   else fail('自应用错误缺少位置');
   if (JSON.stringify(o1.error) === JSON.stringify(o2.error)) pass('重复推断错误稳定一致');
   else fail('重复推断错误不一致（不稳定）');
+
+  // 场景四：可解的多单位整数指数校准宏 —— 成功推断最终类型，不得误报“单位不匹配”
+  // (x 的平方)*(y 的立方) 与单位为 m 的参考读数相加；以 x:m^-1、y:m 调用，乘积单位恰为 m。
+  const calSrc = [
+    'sensor ref : m;',
+    'let cal = fun x -> fun y -> (x * x) * (y * y * y) + ref;',
+    'sensor xv : m^-1;',
+    'sensor yv : m;',
+    'cal xv yv',
+    '',
+  ].join('\n');
+  const r4 = await postInfer(calSrc);
+  if (r4.ok) {
+    pass('可解多单位校准宏推断成功（未误报单位冲突）');
+    const calls = (r4.expressions || []).filter((e) => e.snippet === 'cal xv yv').map((e) => e.type);
+    if (calls.length > 0 && calls.every((t) => t === 'num<m>')) {
+      pass(`校准宏调用类型为 num<m>（${calls.length} 处）`);
+    } else {
+      fail(`校准宏调用类型异常：${JSON.stringify(calls)}（期望 num<m>）`);
+    }
+    if (r4.output === 'num<m>') pass(`HTTP 最终输出类型：${r4.output}`);
+    else fail(`HTTP 最终输出类型错误：${r4.output}（期望 num<m>）`);
+  } else {
+    fail(`可解多单位校准宏被错误拒绝：${r4.error && r4.error.message}`);
+  }
+
+  // 场景五：真正无法满足的整数指数单位约束仍须经 HTTP 入口拒绝
+  const unsatSrc = 'sensor ref : m;\nlet f = fun x -> x * x + ref;\nf 1\n';
+  const r5 = await postInfer(unsatSrc);
+  if (!r5.ok && /单位不匹配/.test(r5.error.message)) {
+    pass(`不可解约束 2·u = m 仍被拒绝：${r5.error.message}`);
+  } else {
+    fail(`不可解约束未被拒绝：${JSON.stringify(r5)}`);
+  }
 }
 
 (async () => {
