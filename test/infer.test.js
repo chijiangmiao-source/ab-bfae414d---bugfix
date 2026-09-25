@@ -62,6 +62,54 @@ test('未定义标识符：报错并定位', () => {
   assert.equal(src.slice(r.error.spans[0].start, r.error.spans[0].end), 'foo');
 });
 
+test('可解整数指数单位约束：x²·y³ 与 m 参考读数相加的校准宏（m^-1、m 调用）', () => {
+  // 校准宏：x 的平方与 y 的立方相乘，再与单位为 m 的参考读数相加。
+  // 以 m^-1 的 x 与 m 的 y 调用时，乘积单位为 (m^-1)^2·m^3 = m，约束可解。
+  const src = [
+    'sensor ref : m;',
+    'let cal = fun x -> fun y -> x * x * y * y * y + ref;',
+    'sensor u : m^-1;',
+    'sensor v : m;',
+    'cal u v',
+    '',
+  ].join('\n');
+  const r = runInference(src);
+  assert.equal(r.ok, true, `可解约束不应被误报为单位不匹配：${r.error && r.error.message}`);
+  assert.equal(r.output, 'num<m>');
+  const cal = r.generalizable.find((g) => g.name === 'cal');
+  assert.ok(cal, 'cal 应有类型方案');
+  assert.match(cal.scheme, /^∀ /, '宏应保持单位多态（可复用）');
+});
+
+test('校准宏跨量纲复用：另一组合法调用 x:m^2、y:m^-1 亦得 num<m>', () => {
+  // (m^2)^2·(m^-1)^3 = m，同一宏的另一组有效量纲组合。
+  const src = [
+    'sensor ref : m;',
+    'let cal = fun x -> fun y -> x * x * y * y * y + ref;',
+    'sensor u : m^-1;',
+    'sensor v : m;',
+    'sensor w : m^2;',
+    'sensor z : m^-1;',
+    'let r1 = cal u v;',
+    'cal w z',
+    '',
+  ].join('\n');
+  const r = runInference(src);
+  assert.equal(r.ok, true, `宏复用不应退化：${r.error && r.error.message}`);
+  assert.equal(r.output, 'num<m>');
+  const r1 = r.generalizable.find((g) => g.name === 'r1');
+  assert.equal(r1.scheme, 'num<m>');
+});
+
+test('不可解整数指数单位约束仍被拒绝：x²·y² 与 m 相加', () => {
+  // x^2·y^2 = m：变量指数 gcd(2,2)=2 不整除 m 的指数 1，无整数解。
+  const src = 'sensor ref : m;\nlet bad = fun x -> fun y -> x * x * y * y + ref;\nbad\n';
+  const r = runInference(src);
+  assert.equal(r.ok, false);
+  assert.match(r.error.message, /单位不匹配/);
+  assert.equal(r.expressions, undefined, '出错响应不得携带旧的成功结论');
+});
+
 test('乘除组合单位', () => {
   assert.equal(runInference('sensor a : m;\nsensor b : s;\na * b\n').output, 'num<m*s>');
   assert.equal(runInference('sensor a : m;\nsensor b : s;\na / b\n').output, 'num<m*s^-1>');

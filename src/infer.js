@@ -143,7 +143,7 @@ function unify(ctx, t1, t2) {
     unify(ctx, a.ret, b.ret);
     return;
   }
-  U.unifyMonos(a.unit, b.unit);
+  U.unifyMonos(a.unit, b.unit, () => newUVar(ctx));
   log(ctx, `单位合一成功：两侧单位归一为 ${renderMono(ctx.R, a.unit)}`);
 }
 

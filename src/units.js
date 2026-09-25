@@ -104,10 +104,91 @@ function occursUVar(v, m) {
 }
 
 /**
+ * 扩展欧几里得：返回 { g, p, q }，其中 g = gcd(a, b) ≥ 0 且 p·a + q·b = g。
+ */
+function egcd(a, b) {
+  let r0 = Math.abs(a);
+  let r1 = Math.abs(b);
+  let s0 = 1;
+  let s1 = 0;
+  let t0 = 0;
+  let t1 = 1;
+  while (r1 !== 0) {
+    const q = Math.floor(r0 / r1);
+    const r2 = r0 - q * r1;
+    const s2 = s0 - q * s1;
+    const t2 = t0 - q * t1;
+    r0 = r1;
+    r1 = r2;
+    s0 = s1;
+    s1 = s2;
+    t0 = t1;
+    t1 = t2;
+  }
+  return { g: r0, p: a < 0 ? -s0 : s0, q: b < 0 ? -t0 : t0 };
+}
+
+let fallbackUVarSeq = 0;
+
+/** 未提供新鲜变量工厂时的内部回退（变量身份唯一即可，id 取负避免与推断上下文混淆）。 */
+function freshUVarFallback() {
+  return { id: -(++fallbackUVarSeq), instance: null };
+}
+
+/**
+ * 单方程整数指数一般求解（MGU）。
+ * 方程 eq = 1（即 ∏ v^e · ∏ b^c = 1）在整数指数阿贝尔群上求最一般合一子：
+ * 对指数行向量做幺模列变换 e·U = [g, 0, …, 0]（g 为全部变量指数的最大公约数）。
+ * 每个基本单位指数均须被 g 整除，否则方程无整数解（返回 null）。
+ * 可解时返回绑定列表 [[变量, 单项式], …]：
+ *   X_i = T0^U[i][0] · ∏_{k≥1} T_k^U[i][k]
+ * 其中 T0 = ∏ b^(−c/g) 为特解方向，T_k 为新鲜单位变量（齐次解格的自由度，
+ * 由 U 的幺模性保证不丢失任何解，即最一般性）。
+ */
+function solveUnitEquation(eq, freshUVar) {
+  const vars = [...eq.vars.entries()];
+  const n = vars.length;
+  if (n === 0) return null;
+  const U = vars.map((_, i) => vars.map((_, j) => (i === j ? 1 : 0)));
+  const f = vars.map(([, e]) => e);
+  for (let k = 1; k < n; k++) {
+    if (f[k] === 0) continue;
+    const { g, p, q } = egcd(f[0], f[k]);
+    const c0 = U.map((row) => row[0]);
+    const ck = U.map((row) => row[k]);
+    const f0 = f[0];
+    const fk = f[k];
+    for (let i = 0; i < n; i++) {
+      U[i][0] = p * c0[i] + q * ck[i];
+      U[i][k] = (f0 / g) * ck[i] - (fk / g) * c0[i];
+    }
+    f[0] = g;
+    f[k] = 0;
+  }
+  const g = f[0];
+  for (const [, c] of eq.bases) {
+    if (c % g !== 0) return null;
+  }
+  const t0 = monoUnit();
+  for (const [b, c] of eq.bases) addBase(t0, b, -c / g);
+  const tz = [];
+  for (let k = 1; k < n; k++) tz.push(monoVar(freshUVar()));
+  const binds = [];
+  for (let i = 0; i < n; i++) {
+    const m = monoUnit();
+    addInto(m, t0, U[i][0]);
+    for (let k = 1; k < n; k++) addInto(m, tz[k - 1], U[i][k]);
+    binds.push([vars[i][0], m]);
+  }
+  return binds;
+}
+
+/**
  * 单位合一：在整数指数阿贝尔群上求解。
  * 失败抛出 UnifyError('unit-mismatch' | 'occurs-unit')。
+ * freshUVar（可选）：一般求解引入齐次自由度时的新鲜单位变量工厂。
  */
-function unifyMonos(u1, u2) {
+function unifyMonos(u1, u2, freshUVar) {
   const a = resolveMono(u1);
   const b = resolveMono(u2);
   if (monoEqual(a, b)) return;
@@ -123,7 +204,8 @@ function unifyMonos(u1, u2) {
     bv.instance = a;
     return;
   }
-  // 方程 a * b^-1 = 1：选取一个变量求解 v^e = R^-1（要求 R 的指数均可被 e 整除）
+  // 方程 a * b^-1 = 1：先尝试单变量求解 v^e = R^-1（要求 R 的指数均可被 e 整除），
+  // 成功时得到最简绑定（其余变量保持自由，即最一般合一子）。
   const eq = monoDiv(a, b);
   let best = null;
   for (const [v, e] of eq.vars) {
@@ -149,7 +231,12 @@ function unifyMonos(u1, u2) {
       return;
     }
   }
-  throw new UnifyError('unit-mismatch', { u1: a, u2: b });
+  // 单变量可除性失败不代表不可解：如 ux^2·uy^3 = m（gcd(2,3)=1 整除 m 的指数，
+  // 整数解存在，如 ux=m^-1、uy=m）。改用一般整数求解（MGU），
+  // 仅当变量指数的最大公约数不整除某基本单位指数时才真正不可解。
+  const binds = solveUnitEquation(eq, freshUVar || freshUVarFallback);
+  if (!binds) throw new UnifyError('unit-mismatch', { u1: a, u2: b });
+  for (const [v, m] of binds) v.instance = m;
 }
 
 /** 以 uMap 中的单项式替换量化单位变量（实例化用）。 */

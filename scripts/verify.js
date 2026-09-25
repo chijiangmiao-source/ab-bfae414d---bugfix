@@ -157,6 +157,37 @@ async function httpChecks() {
   else fail('自应用错误缺少位置');
   if (JSON.stringify(o1.error) === JSON.stringify(o2.error)) pass('重复推断错误稳定一致');
   else fail('重复推断错误不一致（不稳定）');
+
+  // 场景四：可解整数指数单位约束的校准宏 —— x²·y³ 与 m 参考读数相加，
+  // 以 m^-1 的 x、m 的 y 调用时乘积单位为 m，应返回成功最终类型 num<m> 而非单位不匹配
+  const calScript = [
+    'sensor ref : m;',
+    'let cal = fun x -> fun y -> x * x * y * y * y + ref;',
+    'sensor u : m^-1;',
+    'sensor v : m;',
+    'cal u v',
+    '',
+  ].join('\n');
+  const r4 = await postInfer(calScript);
+  if (r4.ok) {
+    pass('校准宏（x²·y³ 与 m 参考读数相加）推断成功');
+    if (r4.output === 'num<m>') pass(`最终输出类型：${r4.output}`);
+    else fail(`最终输出类型错误：${r4.output}（期望 num<m>）`);
+    const calGen = (r4.generalizable || []).find((g) => g.name === 'cal');
+    if (calGen && calGen.scheme.startsWith('∀')) pass(`cal 类型方案已泛化（可复用）：${calGen.scheme}`);
+    else fail(`cal 类型方案未泛化：${JSON.stringify(calGen)}`);
+  } else {
+    fail(`可解单位约束被误报：${r4.error && r4.error.message}`);
+  }
+
+  // 场景五：不可解整数指数单位约束 —— x²·y² 与 m 相加（gcd(2,2) 不整除 1），仍应拒绝
+  const unsolvableSrc = 'sensor ref : m;\nlet bad = fun x -> fun y -> x * x * y * y + ref;\nbad\n';
+  const r5 = await postInfer(unsolvableSrc);
+  if (!r5.ok && /单位不匹配/.test(r5.error.message)) {
+    pass(`不可解单位约束被正确拒绝：${r5.error.message}`);
+  } else {
+    fail(`不可解单位约束未被正确拒绝：${JSON.stringify(r5.ok ? r5.output : r5.error)}`);
+  }
 }
 
 (async () => {
